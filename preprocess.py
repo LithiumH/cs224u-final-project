@@ -95,8 +95,8 @@ def process_all_json(file_dir):
 
 if __name__ == '__main__':
     print("Tokenizing stories with Stanford CoreNLP and saving to {} and {}".format(CNN_STORY_TOKENIZED, DM_STORY_TOKENIZED))
-    # tokenize_stories(CNN_STORY_DIR, CNN_STORY_TOKENIZED)
-    # tokenize_stories(DM_STORY_DIR, DM_STORY_TOKENIZED)
+    tokenize_stories(CNN_STORY_DIR, CNN_STORY_TOKENIZED)
+    tokenize_stories(DM_STORY_DIR, DM_STORY_TOKENIZED)
 
     print("processing tokenized stories into src and tgt pickle files")
     srcs_cnn, tgts_cnn = process_all_json(CNN_STORY_TOKENIZED)

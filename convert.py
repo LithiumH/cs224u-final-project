@@ -22,6 +22,8 @@ PROCESSED_PK = os.path.join('data', 'processed.pk')
 
 DOCS = os.path.join('data', 'docs.pk')
 TAGS = os.path.join('data', 'tags.pk')
+TAGGED_SUMS = os.path.join('data', 'tagged_sums.pk')
+GOLD_SUMS = os.path.join('data', 'gold_sums.pk')
 IDX_TAGS = os.path.join('data', 'idx_tags.pk')
 IDS = os.path.join('data', 'idx.pk')
 
@@ -42,30 +44,30 @@ def tag(doc, tgt):
 
     label = np.zeros(len(doc), dtype=bool)
     ## The following tags all tokens present in both the source and target
-    for i in range(len(doc)):
-        if doc[i] in vocab:
-            label[i] = 1
+#     for i in range(len(doc)):
+#         if doc[i] in vocab:
+#             label[i] = 1
     ## The following does the max tagging thingy the original paper did
-#     l, r = 0, 0
-#     while r < len(tgt):
-#         old_idxs = []
-#         idxs = [(i,i+1) for i, token in enumerate(doc) if token == tgt[r]]
-#         while len(idxs) > 0 and r + 1 < len(tgt):
-#             r += 1
-#             old_idxs, idxs = idxs, []
-#             for idx in old_idxs:
-#                 if idx[-1] < len(doc) and doc[idx[-1]] == tgt[r]:
-#                     idxs.append((idx[0], idx[-1] + 1))
-#         if len(idxs) > 0: ## we ran out of tgt
-#             label[idxs[0][0]:idxs[0][-1]] = 1
-#             break
-#         elif len(old_idxs) > 0: ## we found longest seq
-#             label[old_idxs[0][0]:old_idxs[0][-1]] = 1
-#         else: ## this token does not exist
-#             r += 1
+    l, r = 0, 0
+    while r < len(tgt):
+        old_idxs = []
+        idxs = [(i,i+1) for i, token in enumerate(doc) if token == tgt[r]]
+        while len(idxs) > 0 and r + 1 < len(tgt):
+            r += 1
+            old_idxs, idxs = idxs, []
+            for idx in old_idxs:
+                if idx[-1] < len(doc) and doc[idx[-1]] == tgt[r]:
+                    idxs.append((idx[0], idx[-1] + 1))
+        if len(idxs) > 0: ## we ran out of tgt
+            label[idxs[0][0]:idxs[0][-1]] = 1
+            break
+        elif len(old_idxs) > 0: ## we found longest seq
+            label[old_idxs[0][0]:old_idxs[0][-1]] = 1
+        else: ## this token does not exist
+            r += 1
     idxs = []
     for i in range(len(tgt)):
-        idxs.append(np.argwhere(doc == tgt[i]).flatten())
+        idxs.append(list(np.argwhere(doc == tgt[i]).flatten()))
     return label, idxs
 
 def process_src_tgt(srcs, tgts, start_idx=0, end_idx=-1):
@@ -118,12 +120,19 @@ def process_ranges(args):
 
 if __name__ == '__main__':
     print("loading src and tgt")
-    src, tgt = [pickle.load(open(f_name, 'rb')) for f_name in [SRC_PK, TGT_PK]]
+    f = open(SRC_PK, 'rb')
+    src = pickle.load(f)
+    f.close()
+
+    f = open(TGT_PK, 'rb')
+    tgt = pickle.load(f)
+    f.close()
 
     print("processing sequences")
-    n = 35
+    n = 20
     pool = Pool(n)
     k = len(src)//n
+    # k = 350//n
     result = pool.map(process_ranges, [(start * k, (start+1) * k) for start in range(n)])
     strictly_increasing = check_strictly_increasing([tup[-1] for tup in result])
     print("ranges in the result is strictly increasing? {}".format(strictly_increasing))
@@ -138,22 +147,24 @@ if __name__ == '__main__':
         gold_sums_bert.extend(clean(d, valid_ids))
         gold_sums_idxs.extend(clean(e, valid_ids))
         ids.extend(clean(f, valid_ids))
-    for obj, fname in zip([docs, tags, gold_sums_idxs, ids], [DOCS, TAGS, IDX_TAGS, IDS]):
+    print("checkpointing into many files")
+    for obj, fname in zip([docs, tags, tagged_sums, gold_sums_bert, gold_sums_idxs, ids],
+                          [DOCS, TAGS, TAGGED_SUMS, GOLD_SUMS, IDX_TAGS, IDS]):
         with open(fname, 'wb') as f:
             pickle.dump(obj, f)
-    processed = dict()
 
     print("calculating rogue score of tagged summaries (tokenized by Bert)")
     rouge = Rouge()
     scores = rouge.get_scores(tagged_sums, gold_sums_bert, avg=True)
     print("Roge scores: {}".format(scores))
+    processed = dict()
     processed['rogue_oracle'] = scores
 
     print("Splitting data into train/dev/test/tiny")
     X_train, X_dev_test, y_tags_train, y_tags_dev_test, y_decode_train, y_decode_dev_test, ids_train, ids_dev_test = \
-            train_test_split(docs, tags, gold_sums_idxs, ids)
+            train_test_split(docs, tags, gold_sums_idxs, ids, test_size=0.1)
     X_dev, X_test, y_tags_dev, y_tags_test, y_decode_dev, y_decode_test, ids_dev, ids_test =\
-            train_test_split(X_dev_test, y_tags_dev_test, y_decode_dev_test, ids_dev_test)
+            train_test_split(X_dev_test, y_tags_dev_test, y_decode_dev_test, ids_dev_test, test_size=0.5)
     X_tiny, y_tags_tiny, y_decode_tiny, ids_tiny = \
             X_train[:5000], y_tags_train[:5000], y_decode_train[:5000], ids_train[:5000]
     processed = dict()
@@ -165,10 +176,6 @@ if __name__ == '__main__':
             'ids':ids_test}
     processed['tiny'] = {'X':X_tiny, 'y_tag':y_tags_tiny, 'y_decode':y_decode_tiny,
             'ids':ids_tiny}
-    # del processed['docs']
-    # del processed['tags']
-    # del processed['gold_sums_idxs']
-    # del processed['ids']
     print("checkpointing into a file")
     with open(PROCESSED_PK, 'wb') as f:
         pickle.dump(processed, f)

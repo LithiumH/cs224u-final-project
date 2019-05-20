@@ -30,10 +30,12 @@ from tqdm import tqdm
 
 from rouge import Rouge
 
-from models import SummarizerLinear
+from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder
 import util
 
-PROCESSED_DATA = os.path.join('data', 'data.pk')
+print("premain: loading all data")
+# PROCESSED_DATA = os.path.join('data', 'data.pk')
+PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
 with open(PROCESSED_DATA, 'rb') as f:
     all_data = pickle.load(f)
 
@@ -58,15 +60,43 @@ def collate_fn(examples):
     collate function requires all examples to be non-padded
     """
 
-    def merge_1d(arrays, dtype=torch.int64, pad_value=0):
+    def merge_tag(arrays, dtype=torch.int64, pad_value=0):
+        """
+        This function is used for tagging task only. We can check the
+        shape of the arrays to know when to call this function
+        """
         lengths = [len(a) for a in arrays]
         padded = torch.zeros(len(arrays), max(lengths), dtype=dtype)
         for i, seq in enumerate(arrays):
             end = lengths[i]
-            padded[i, :end] = torch.tensor(seq)[:end]
+            padded[i, :end] = torch.tensor(np.array(seq, dtype=int))[:end]
         return padded
+
+    def merge_decode(arrays, src_max_len, dtype=torch.int64, pad_value=0):
+        """
+        This function is used for decoding task only.
+        It creates "masks" from the indecies :
+        [1, 3] -> [[0, 1, 0, 0], [0, 0, 0, 1]]
+        Note the returned mask is of tgt_length + 1 to account for the offsets of the begin token.
+        """
+        tgt_max_len = max(len(a) for a in arrays)
+        padded = torch.zeros(len(arrays), tgt_max_len + 1, src_max_len, dtype=dtype)
+        for i, seq in enumerate(arrays):
+            c = 0 # this is used to truncate all the y's that are "empty"
+            for lst in seq:
+                if len(lst) > 0:
+                    padded[i, c + 1].scatter_(0, torch.tensor(lst, dtype=torch.int64), 1)
+                    c += 1
+        return padded
+    merge_X = merge_tag # same merge function
+
     X, y, ids = zip(*examples)
-    return merge_1d(X), merge_1d(y), torch.tensor(ids, dtype=torch.int64)
+    X = merge_X(X)
+    if type(y[0][0]) == type(np.array([])): # we are doing decoding task
+        y = merge_decode(y, max(len(a) for a in X))
+    else:
+        y = merge_tag(y)
+    return X, y, torch.tensor(ids, dtype=torch.int64)
 
 def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
@@ -83,7 +113,11 @@ def train(args):
     torch.cuda.manual_seed_all(args.seed)
 
     log.info('Building model...')
-    model = SummarizerLinear()
+    if args.task == 'tag':
+        model = SummarizerLinear()
+    else:
+        model = SummarizerAbstractive(100, 128, device)
+
 #     model = nn.DataParallel(model, args.gpu_ids)
     if args.load_path:
         log.info('Loading checkpoint from {}...'.format(args.load_path))
@@ -93,12 +127,30 @@ def train(args):
     model = model.to(device)
 
     model.train()
+
+    ## get a saver
+    saver = util.CheckpointSaver(args.save_dir,
+                                 max_checkpoints=args.max_checkpoints,
+                                 metric_name=args.metric_name,
+                                 maximize_metric=args.maximize_metric,
+                                 log=log)
+
     optimizer = optim.Adam(model.parameters(), args.lr,
                                weight_decay=args.l2_wd)
 
     log.info('Building dataset...')
-    train_dataset = SummarizationDataset(all_data['tiny']['X'], all_data['tiny']['y'], all_data['tiny']['ids'])
-    dev_dataset = SummarizationDataset(all_data['tiny']['X'], all_data['tiny']['y'], all_data['tiny']['ids'])
+    split = all_data['tiny']
+    if args.task == 'tag':
+        train_dataset = SummarizationDataset(
+                split['X'], split['y_tag'], split['ids'])
+        dev_dataset = SummarizationDataset(
+                split['X'], split['y_tag'], split['ids'])
+    else:
+        train_dataset = SummarizationDataset(
+                split['X'], split['y_decode'], split['ids'])
+        dev_dataset = SummarizationDataset(
+                split['X'], split['y_decode'], split['ids'])
+
     train_loader = data.DataLoader(train_dataset,
                                    batch_size=args.batch_size,
                                    num_workers=args.num_workers,
@@ -123,10 +175,16 @@ def train(args):
                 X = X.to(device)
                 optimizer.zero_grad()
 
-                logits, mask = model(X)
                 y = y.float().to(device)
-                loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
-                loss_val = loss.item()
+                if args.task == 'tag':
+                    logits, mask = model(X)
+                    loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
+                    loss_val = loss.item()
+                else:
+                    logits = model(X, y[:, :-1, :])
+                    y_mask = (y[:, 1:].sum(-1, keepdim=True) != 0).float()
+                    loss = (F.binary_cross_entropy_with_logits(logits, y[:, 1:], reduction='none') * y_mask).mean()
+                    loss_val = loss.item()
 
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
@@ -149,7 +207,7 @@ def train(args):
 
                     # Evaluate and save checkpoint
                     log.info('Evaluating at step {}...'.format(step))
-                    results, pred_dict = evaluate(model, dev_loader, device)
+                    results, pred_dict = evaluate(args, model, dev_loader, device)
                     if results is None:
                         log.info('Selected predicted no select for all in batch')
                         continue
@@ -171,8 +229,12 @@ def train(args):
 #                                    split='dev',
 #                                    num_visuals=args.num_visuals)
 
-def evaluate(model, data_loader, device):
+def evaluate(args, model, data_loader, device):
     model.eval()
+    test_model = None
+    if args.task == 'decode':
+        test_model = GreedyDecoder(model, device)
+        test_model.eval()
     all_preds = []
     gold_summaries = [] # tokenized gold summaries
     with torch.no_grad(), \
@@ -180,29 +242,44 @@ def evaluate(model, data_loader, device):
         for X, y, ids in data_loader:
             # Setup for forward
             batch_size = X.size(0)
-            logits, mask = model(X)
             y = y.float().to(device)
-            loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
+            if args.task == 'tag':
+                logits, mask = model(X)
+                loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
+            else:
+                ## need to implement beam search
+                token_ids, logits = test_model(X, max_tgt_len=y.size(1)-1)
+                y_mask = (y[:, 1:].sum(-1, keepdim=True) != 0).float()
+                loss = (F.binary_cross_entropy_with_logits(logits, y[:, 1:], reduction='none') * y_mask).mean()
 
             # Log info
             progress_bar.update(batch_size)
             progress_bar.set_postfix(Loss=loss.item())
 
-            preds = util.untokenize(X, logits, mask)
+            if args.task == 'tag':
+                preds = util.untokenize(X, logits, mask)
+            else:
+                assert test_model != None
+                preds = util.unidize(token_ids)
+
             all_preds.extend(preds)
-            gold_summaries.extend(np.array(gold_sums)[np.array(ids)])
+            gold_summaries.extend(list(np.array(gold_sums)[np.array(ids)]))
 
     model.train()
 
-    valid_ids = [i for i in range(len(all_preds)) if len(all_preds[i]) > 0]
-    all_pred = [all_pred[i] for i in valid_ids]
-    gold_summaries = [gold_summaries[i] for i in valid_ids]
+    valid_ids = [i for i in range(len(all_preds)) \
+            if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
     if len(valid_ids) == 0:
         return None, None
+    pred = [all_preds[i] for i in valid_ids]
+    ref = [gold_summaries[i] for i in valid_ids]
     rouge = Rouge()
-    results = rouge.get_scores(all_preds, gold_sums, avg=True)
+    results = rouge.get_scores(pred, ref, avg=True)
 
     return results, all_preds
+
+def test(args):
+    pass
 
 
 if __name__ == '__main__':
@@ -216,11 +293,17 @@ if __name__ == '__main__':
     parser.add_argument("-lr", default=0.001)
     parser.add_argument("-l2_wd", default=0)
     parser.add_argument("-eval_steps", default=1)
-    parser.add_argument("-num_epochs", default=1)
+    parser.add_argument("-num_epochs", default=2)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
     parser.add_argument("-name", default='default')
     parser.add_argument("-metric_name", default='rouge-1')
-    args = parser.parse_args([])
+    parser.add_argument("-task", default='tag', choices=['tag', 'decode'])
+    parser.add_argument("-max_checkpoints", default=3)
+    parser.add_argument("-maximize_metric", default=True)
+    args = parser.parse_args()
 
-    train(args)
+    if args.split == 'train' or args.split == 'tiny':
+        train(args)
+    else:
+        test(args)

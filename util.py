@@ -337,6 +337,36 @@ def untokenize(X, logits, mask, logit_threshold=0.):
     sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids)).replace(' ##', '') for selected_ids in selected]
     return sents # (batch_size, 'a (string) summary')
 
+def unidize(ids):
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    sents = [' '.join(tokenizer.convert_ids_to_tokens([ii for ii in i if ii != 0 and ii != 102])).replace(' ##', '') \
+            for i in ids]
+    return sents
+
+# def greedy_decode(decoder, decoder_hidden, encoder_outputs, target_tensor):
+#     '''
+#     https://github.com/budzianowski/PyTorch-Beam-Search-Decoding
+#     :param target_tensor: target indexes tensor of shape [B, T] where B is the batch size and T is the maximum length of the output sentence
+#     :param decoder_hidden: input tensor of shape [1, B, H] for start of the decoding
+#     :param encoder_outputs: if you are using attention mechanism you can pass encoder outputs, [T, B, H] where T is the maximum length of input sentence
+#     :return: decoded_batch
+#     '''
+#
+#     batch_size, seq_len = target_tensor.size()
+#     decoded_batch = torch.zeros((batch_size, MAX_LENGTH))
+#     decoder_input = torch.LongTensor([[SOS_token] for _ in range(batch_size)], device=device)
+#
+#     for t in range(MAX_LENGTH):
+#         decoder_output, decoder_hidden = decoder(decoder_input, decoder_hidden, encoder_outputs)
+#
+#         topv, topi = decoder_output.data.topk(1)  # get candidates
+#         topi = topi.view(-1)
+#         decoded_batch[:, t] = topi
+#
+#         decoder_input = topi.detach().view(-1, 1)
+#
+#     return decoded_batch
+
 
 # def torch_from_json(path, dtype=torch.float32):
 #     """Load a PyTorch Tensor from a JSON file.

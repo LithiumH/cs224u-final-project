@@ -177,12 +177,13 @@ class SummarizerLinearAttended(nn.Module):
         enc = self.linear(enc).squeeze(-1) # (batch_size, max_len)
         return enc, mask
 
-class SummarizerAbstractive(nn.Module):
-    def __init__(self, att_hidden_size, hidden_size):
-        super(SummarizerAbstractive, self).__init__()
+class SummarizerDecoder(nn.Module):
+    def __init__(self, att_hidden_size, hidden_size, device):
+        super(SummarizerDecoder, self).__init__()
+        self.device = device
         self.bert_reduce = nn.Linear(BERT_HIDDEN_SIZE, hidden_size)
 
-        self.cell = nn.LSTMCell(dec_emb.embedding_dim, hidden_size)
+        self.cell = nn.LSTMCell(BERT_HIDDEN_SIZE, hidden_size)
 
         self.enc_linear = nn.Linear(BERT_HIDDEN_SIZE, att_hidden_size)
         self.dec_linear = nn.Linear(hidden_size, att_hidden_size)
@@ -195,26 +196,96 @@ class SummarizerAbstractive(nn.Module):
 
         xavier_uniform_(self.enc_linear.weight)
         xavier_uniform_(self.dec_linear.weight)
-        xavier_uniform_(self.att_linear_middle.weight)
+        # xavier_uniform_(self.att_linear_middle.weight)
         xavier_uniform_(self.att_linear.weight)
 
-    def forward(self, X, enc, mask, h=None, c=None, dec_len=10):
+    def forward(self, y, enc, state=None, dec_len=10):
         """
         X: (batch_size, dec_len, max_len) the last index denotes the position of correct hidden states
         enc: (batch_size, max_len, bert_hidden_size)
         """
-        if h is None:
+        if state is None:
             h = self.bert_reduce(enc[:, 0, :]) # Take CLS and encode
             c = h.clone()
-        outputs = []
+        else:
+            h, c = state
+        outputs = torch.zeros(y.size(), device=self.device)
         for i in range(dec_len):
-            hidden_state_mask = X[:, i, :] # (batch_size, max_len)
+            hidden_state_mask = y[:, i, :] # (batch_size, max_len)
+            if not (hidden_state_mask.sum(-1) > 0).any().item():
+                continue
             hidden_state_sum = torch.bmm(hidden_state_mask.unsqueeze(1), enc).squeeze(1)
-            inp = hidden_state_sum / hidden_state_mask.sum(-1) # (batch_size, bert_hidden_size)
+            inp = hidden_state_sum / (hidden_state_mask.sum(-1, keepdim=True) + 1e-30)
+            # (batch_size, bert_hidden_size)
             h, c = self.cell(inp, (h, c))
-            enc = self.enc_linear(enc) # (batch_size, max_len, att_hidden_size)
-            dec = self.dec_linear(h).unsqueeze(1) # (batch_size, 1, att_hidden_size)
-            e = torch.squeeze(self.att_linear(F.tanh(enc + dec)), -1) # (batch_size, max_len)
-            outputs.append(e)
+            enc4att = self.enc_linear(enc) # (batch_size, max_len, att_hidden_size)
+            dec4att = self.dec_linear(h).unsqueeze(1) # (batch_size, 1, att_hidden_size)
+            e = torch.squeeze(self.att_linear(torch.tanh(enc4att + dec4att)), -1)
+            # ^ (batch_size, max_len)
+            outputs[:, i, :] = e
+        # ^^^ (b_size, dec_len, max_len)
+        return outputs, (h, c) ## also return the most recent states
+
+SEP_ID = 102
+
+class SummarizerAbstractive(nn.Module):
+    def __init__(self, att_hidden_size, hidden_size, device):
+        super(SummarizerAbstractive, self).__init__()
+        self.bert = BertModel.from_pretrained('bert-base-uncased')
+        self.decoder = SummarizerDecoder(att_hidden_size, hidden_size, device)
+
+    def forward(self, X, y):
+        """
+        X: (batch_size, max_src_len)
+        y: (batch_size, dec_len, max_src_len)
+        """
+
+        mask = (X != PAD_INDEX).float()
+        encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (num_layers, batch_size, max_len, bert_hidden_size)
+        outputs, _ = self.decoder(y, encoded_layers, dec_len=y.size(1))
         return outputs
+
+class GreedyDecoder(nn.Module):
+
+    def __init__(self, original, device):
+        """
+        during test time, we fix X.
+        """
+        super(GreedyDecoder, self).__init__()
+        self.device = device
+        self.bert = original.bert
+        self.decoder = original.decoder
+
+
+    def forward(self, X, max_tgt_len=100):
+        """
+        y: (batch_size, dec_len, max_src_len)
+        """
+        mask = (X != PAD_INDEX).float()
+        encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (num_layers, batch_size, max_tgt_len, bert_hidden_size)
+        batch_size, max_src_len = X.size()
+
+        decoded_batch = torch.zeros((batch_size, max_tgt_len), device=self.device)
+        out_batch = torch.zeros((batch_size, max_tgt_len, max_src_len), device=self.device)
+        out = torch.LongTensor([[[0] * max_src_len] for _ in range(batch_size)], device=self.device)
+        state = None
+
+        done = torch.ones(batch_size, dtype=torch.int, device=self.device) * 3
+        for t in range(max_tgt_len):
+            out, state = self.decoder(out, encoded_layers, state=state, dec_len=1)
+            # ^ (batch_size, 1, max_src_len)
+            out_batch[:, t] = out.squeeze()
+            topv, topi = out.data.topk(1, dim=-1)  # get candidates (batch_size, 1, 1)
+            topi = topi.view(-1) # this is the optimal choice for each example
+            for i in range(batch_size):
+                decoded_batch[i, t] = X[i, topi[i]]
+            done = done - (decoded_batch[:, t] == SEP_ID).int()
+            if done.sum().item() == 0:
+                break
+
+            out.fill_(0)
+            for i in range(batch_size):
+                out[i, 0, topi[i]] = 1
+
+        return decoded_batch.detach().cpu().numpy(), out_batch
 
