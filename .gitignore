@@ -11,3 +11,7 @@ data/
 out/
 .*.py
 .ipynb_checkpoints/
+
+__pycache__/
+BertSum/
+saved_models/
