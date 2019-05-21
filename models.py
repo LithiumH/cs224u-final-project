@@ -4,7 +4,6 @@ import json
 import pickle
 import argparse
 import logging
-from multiprocessing import Pool
 
 import numpy as np
 import torch
@@ -144,7 +143,7 @@ class GeneratorProbability(nn.Module):
 BERT_HIDDEN_SIZE = 768
 PAD_INDEX = 0
 class SummarizerLinear(nn.Module):
-    def __init__(self):
+    def __init__(self, ):
         super(SummarizerLinear, self).__init__()
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
@@ -264,7 +263,7 @@ class GreedyDecoder(nn.Module):
 
         decoded_batch = torch.zeros((batch_size, max_tgt_len), device=self.device)
         out_batch = torch.zeros((batch_size, max_tgt_len, max_src_len), device=self.device)
-        out = torch.LongTensor([[[0] * max_src_len] for _ in range(batch_size)], device=self.device)
+        out = torch.LongTensor([[[0] * max_src_len] for _ in range(batch_size)]).to(self.device)
         state = None
 
         done = torch.ones(batch_size, dtype=torch.int, device=self.device) * 3

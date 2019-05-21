@@ -1,6 +1,3 @@
-import nltk
-from nltk.tokenize import sent_tokenize, word_tokenize
-
 import os
 import subprocess
 import json
@@ -34,8 +31,8 @@ from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder
 import util
 
 print("premain: loading all data")
-# PROCESSED_DATA = os.path.join('data', 'data.pk')
-PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
+PROCESSED_DATA = os.path.join('data', 'data.pk')
+# PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
 with open(PROCESSED_DATA, 'rb') as f:
     all_data = pickle.load(f)
 
@@ -102,8 +99,9 @@ def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
     log = util.get_logger(args.save_dir, args.name)
     tbx = SummaryWriter(args.save_dir)
-#     device, args.gpu_ids = util.get_available_devices()
-    device, args.gpu_ids = torch.device('cpu'), []
+    device, args.gpu_ids = util.get_available_devices()
+    # device, args.gpu_ids = torch.device('cpu'), []
+    log.info('training on device {}'.format(str(device)))
 
     # Set random seed
     log.info('Using random seed {}...'.format(args.seed))
@@ -234,12 +232,14 @@ def evaluate(args, model, data_loader, device):
     test_model = None
     if args.task == 'decode':
         test_model = GreedyDecoder(model, device)
+        test_model.to(device)
         test_model.eval()
     all_preds = []
     gold_summaries = [] # tokenized gold summaries
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for X, y, ids in data_loader:
+            X = X.to(device)
             # Setup for forward
             batch_size = X.size(0)
             y = y.float().to(device)
@@ -292,7 +292,7 @@ if __name__ == '__main__':
     parser.add_argument("-num_workers", default=1)
     parser.add_argument("-lr", default=0.001)
     parser.add_argument("-l2_wd", default=0)
-    parser.add_argument("-eval_steps", default=1)
+    parser.add_argument("-eval_steps", default=5000)
     parser.add_argument("-num_epochs", default=2)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
