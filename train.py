@@ -31,8 +31,8 @@ from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder, Summa
 import util
 
 print("premain: loading all data")
-PROCESSED_DATA = os.path.join('data', 'data.pk')
-# PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
+# PROCESSED_DATA = os.path.join('data', 'data.pk')
+PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
 with open(PROCESSED_DATA, 'rb') as f:
     all_data = pickle.load(f)
 
@@ -96,8 +96,10 @@ def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
     log = util.get_logger(args.save_dir, args.name)
     tbx = SummaryWriter(args.save_dir)
-    device, args.gpu_ids = util.get_available_devices()
-    # device, args.gpu_ids = torch.device('cpu'), []
+    if args.gpu_ids == 'cpu':
+        device, args.gpu_ids = torch.device('cpu'), []
+    else:
+        device, args.gpu_ids = util.get_available_devices()
     log.info('training on device {}'.format(str(device)))
 
     # Set random seed
@@ -109,8 +111,8 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        # model = SummarizerLinearAttended(128, 256)
-        model = SummarizerLinear()
+        model = SummarizerLinearAttended(128, 256)
+#         model = SummarizerLinear()
     else:
         model = SummarizerAbstractive(128, 256, device)
 
@@ -287,12 +289,12 @@ if __name__ == '__main__':
     parser.add_argument("-seed", default=827)
     parser.add_argument("-load_path", default=None)
     parser.add_argument("-split", default='tiny')
-    parser.add_argument("-batch_size", default=8)
-    parser.add_argument("-gpu_ids", default=[0])
+    parser.add_argument("-batch_size", default=8, type=int)
+    parser.add_argument("-gpu_ids", default='0')
     parser.add_argument("-num_workers", default=1)
-    parser.add_argument("-lr", default=0.001)
+    parser.add_argument("-lr", default=0.0001)
     parser.add_argument("-l2_wd", default=0)
-    parser.add_argument("-eval_steps", default=5000)
+    parser.add_argument("-eval_steps", default=5000, type=int)
     parser.add_argument("-num_epochs", default=2)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')

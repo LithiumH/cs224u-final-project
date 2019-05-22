@@ -33,17 +33,14 @@ class ScaledDotProductAttention(nn.Module):
         super().__init__()
         self.temperature = temperature
         self.dropout = nn.Dropout(attn_dropout)
-        self.softmax = nn.Softmax(dim=2)
+        self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, q, k, v, mask=None):
 
         attn = torch.bmm(q, k.transpose(1, 2))
         attn = attn / self.temperature
-        print(attn.size(), mask.size())
-
         if mask is not None:
-            attn = attn.masked_fill(mask, -np.inf)
-
+            attn = attn.masked_fill((1 - mask), float('-inf'))
         attn = self.softmax(attn)
         attn = self.dropout(attn)
         output = torch.bmm(attn, v)
@@ -77,6 +74,9 @@ class MultiHeadAttention(nn.Module):
 
 
     def forward(self, q, k, v, mask=None):
+        """
+        mask denotes the location of the real characters
+        """
 
         d_k, d_v, n_head = self.d_k, self.d_v, self.n_head
 
@@ -122,7 +122,7 @@ class DecoderAttention(nn.Module):
         dec = self.dec_linear(torch.unsqueeze(dec, 1)) # (batch_size, 1, att_hidden_size)
         e = torch.squeeze(self.att_linear(F.tanh(enc + dec)), -1) # (batch_size, max_len)
         if mask is not None:
-            e.masked_fill_(mask, float('-inf'))
+            e.masked_fill_(1 - mask, float('-inf'))
         att = F.softmax(e, dim=-1) # (batch_size, max_len)
         h_context = torch.bmm(att.unsqueeze(1), original_enc).squeeze(1) # (batch_size, enc_hidden_size)
         return h_context, att
@@ -170,7 +170,8 @@ class SummarizerLinearAttended(nn.Module):
         mask = (X != PAD_INDEX).float()
         encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (batch_size, max_len, bert_hidden_size)
         enc = encoded_layers
-        enc, att = self.transformer(enc, enc, enc, mask.unsqueeze(-1).byte()) # (batch_size, max_len, hidden_size)
+        enc, _ = self.transformer(enc, enc, enc, mask.unsqueeze(1).expand(-1, X.size(1), -1).byte()) 
+        # ^(batch_size, max_len, hidden_size)
         enc = self.linear(enc).squeeze(-1) # (batch_size, max_len)
         return enc, mask
 
