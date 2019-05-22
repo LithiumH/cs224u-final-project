@@ -36,19 +36,15 @@ PROCESSED_DATA = os.path.join('data', 'data.pk')
 with open(PROCESSED_DATA, 'rb') as f:
     all_data = pickle.load(f)
 
-GOLD_SUMS = os.path.join('data', 'gold_sums.pk')
-with open(GOLD_SUMS, 'rb') as f:
-    gold_sums = pickle.load(f)
-
 class SummarizationDataset(data.Dataset):
-    def __init__(self, X, y, ids):
+    def __init__(self, X, y, gold_sums):
         super(SummarizationDataset, self).__init__()
-        assert len(X) == len(y) == len(ids)
+        assert len(X) == len(y) == len(gold_sums)
         self.X = X
         self.y = y
-        self.ids = ids
+        self.gold_sums = gold_sums
     def __getitem__(self, i):
-        return (self.X[i], self.y[i], self.ids[i])
+        return (self.X[i], self.y[i], self.gold_sums[i])
     def __len__(self):
         return len(self.X)
 
@@ -87,13 +83,13 @@ def collate_fn(examples):
         return padded
     merge_X = merge_tag # same merge function
 
-    X, y, ids = zip(*examples)
+    X, y, gold_sums = zip(*examples)
     X = merge_X(X)
     if type(y[0][0]) == type(np.array([])): # we are doing decoding task
         y = merge_decode(y, max(len(a) for a in X))
     else:
         y = merge_tag(y)
-    return X, y, torch.tensor(ids, dtype=torch.int64)
+    return X, y, gold_sums
 
 def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
@@ -114,7 +110,7 @@ def train(args):
     if args.task == 'tag':
         model = SummarizerLinear()
     else:
-        model = SummarizerAbstractive(100, 128, device)
+        model = SummarizerAbstractive(128, 256, device)
 
 #     model = nn.DataParallel(model, args.gpu_ids)
     if args.load_path:
@@ -137,17 +133,19 @@ def train(args):
                                weight_decay=args.l2_wd)
 
     log.info('Building dataset...')
-    split = all_data['tiny']
+    train_split = all_data['train']
+    dev_split = all_data['dev']
+
     if args.task == 'tag':
         train_dataset = SummarizationDataset(
-                split['X'], split['y_tag'], split['ids'])
+                train_split['X'], train_split['y_tag'], train_split['gold_sums'])
         dev_dataset = SummarizationDataset(
-                split['X'], split['y_tag'], split['ids'])
+                dev_split['X'], dev_split['y_tag'], dev_split['gold_sums'])
     else:
         train_dataset = SummarizationDataset(
-                split['X'], split['y_decode'], split['ids'])
+                train_split['X'], train_split['y_decode'], train_split['gold_sums'])
         dev_dataset = SummarizationDataset(
-                split['X'], split['y_decode'], split['ids'])
+                dev_split['X'], dev_split['y_decode'], dev_split['gold_sums'])
 
     train_loader = data.DataLoader(train_dataset,
                                    batch_size=args.batch_size,
@@ -238,7 +236,7 @@ def evaluate(args, model, data_loader, device):
     gold_summaries = [] # tokenized gold summaries
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
-        for X, y, ids in data_loader:
+        for X, y, gold_sums in data_loader:
             X = X.to(device)
             # Setup for forward
             batch_size = X.size(0)
@@ -263,7 +261,7 @@ def evaluate(args, model, data_loader, device):
                 preds = util.unidize(token_ids)
 
             all_preds.extend(preds)
-            gold_summaries.extend(list(np.array(gold_sums)[np.array(ids)]))
+            gold_summaries.extend(gold_sums)
 
     model.train()
 
@@ -292,7 +290,7 @@ if __name__ == '__main__':
     parser.add_argument("-num_workers", default=1)
     parser.add_argument("-lr", default=0.001)
     parser.add_argument("-l2_wd", default=0)
-    parser.add_argument("-eval_steps", default=5000)
+    parser.add_argument("-eval_steps", default=140000)
     parser.add_argument("-num_epochs", default=2)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
