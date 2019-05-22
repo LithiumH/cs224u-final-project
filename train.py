@@ -27,7 +27,7 @@ from tqdm import tqdm
 
 from rouge import Rouge
 
-from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder
+from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder, SummarizerLinearAttended
 import util
 
 print("premain: loading all data")
@@ -96,8 +96,8 @@ def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
     log = util.get_logger(args.save_dir, args.name)
     tbx = SummaryWriter(args.save_dir)
-#     device, args.gpu_ids = util.get_available_devices()
-    device, args.gpu_ids = torch.device('cpu'), []
+    device, args.gpu_ids = util.get_available_devices()
+    # device, args.gpu_ids = torch.device('cpu'), []
     log.info('training on device {}'.format(str(device)))
 
     # Set random seed
@@ -109,7 +109,8 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinearAttended(128, 256)
+        # model = SummarizerLinearAttended(128, 256)
+        model = SummarizerLinear()
     else:
         model = SummarizerAbstractive(128, 256, device)
 
@@ -256,7 +257,7 @@ def evaluate(args, model, data_loader, device):
             progress_bar.set_postfix(Loss=loss.item())
 
             if args.task == 'tag':
-                preds = util.untokenize(X, logits, mask)
+                preds = util.untokenize(X, logits, mask, topk=60)
             else:
                 assert test_model != None
                 preds = util.unidize(token_ids)

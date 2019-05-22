@@ -39,6 +39,7 @@ class ScaledDotProductAttention(nn.Module):
 
         attn = torch.bmm(q, k.transpose(1, 2))
         attn = attn / self.temperature
+        print(attn.size(), mask.size())
 
         if mask is not None:
             attn = attn.masked_fill(mask, -np.inf)
@@ -161,7 +162,7 @@ class SummarizerLinearAttended(nn.Module):
         super(SummarizerLinearAttended, self).__init__()
         self.hidden_size = hidden_size
         self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.linear = nn.Linear(hidden_size, 1)
+        self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
         self.transformer = MultiHeadAttention(6, BERT_HIDDEN_SIZE, att_hidden_size, hidden_size)
         xavier_uniform_(self.linear.weight)
 
@@ -169,7 +170,7 @@ class SummarizerLinearAttended(nn.Module):
         mask = (X != PAD_INDEX).float()
         encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (batch_size, max_len, bert_hidden_size)
         enc = encoded_layers
-        enc = self.transformer(enc, enc, enc, mask) # (batch_size, max_len, hidden_size)
+        enc, att = self.transformer(enc, enc, enc, mask.unsqueeze(-1).byte()) # (batch_size, max_len, hidden_size)
         enc = self.linear(enc).squeeze(-1) # (batch_size, max_len)
         return enc, mask
 
