@@ -330,11 +330,17 @@ def get_logger(log_dir, name):
 
     return logger
 
-def untokenize(X, logits, mask, logit_threshold=0.):
+def untokenize(X, logits, mask, logit_threshold=0., topk=50):
+    logits = logits.cpu() # (batch_size, max_len)
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    predicted_mask = (logits > logit_threshold) * mask.byte()
-    selected = torch.masked_select(X, predicted_mask)
-    sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids)).replace(' ##', '') for selected_ids in selected]
+    if topk:
+        _, inds = logits.topk(topk, dim=-1)
+        predicted_mask = (torch.zeros(logits.size()).scatter_(-1, inds, 1)) * mask.float()
+    else:
+        predicted_mask = (logits > logit_threshold) * mask.byte()
+    selected = [torch.masked_select(X[i], predicted_mask[i].byte()).cpu().numpy().tolist() for i in range(logits.size(0))]
+    sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids)).replace(' ##', '').replace('[SEP]', '') \
+             for selected_ids in selected]
     return sents # (batch_size, 'a (string) summary')
 
 def unidize(ids):

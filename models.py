@@ -264,6 +264,7 @@ class GreedyDecoder(nn.Module):
         decoded_batch = torch.zeros((batch_size, max_tgt_len), device=self.device)
         out_batch = torch.zeros((batch_size, max_tgt_len, max_src_len), device=self.device)
         out = torch.LongTensor([[[0] * max_src_len] for _ in range(batch_size)]).to(self.device)
+        out[:, 0, 0] = 1 # start off with CLS
         state = None
 
         done = torch.ones(batch_size, dtype=torch.int, device=self.device) * 3
@@ -276,12 +277,13 @@ class GreedyDecoder(nn.Module):
             for i in range(batch_size):
                 decoded_batch[i, t] = X[i, topi[i]]
             done = done - (decoded_batch[:, t] == SEP_ID).int()
-            if done.sum().item() == 0:
+            if (done <= 0).all().item():
                 break
 
             out.fill_(0)
-            for i in range(batch_size):
-                out[i, 0, topi[i]] = 1
+            out.scatter_(-1, topi.view(-1, 1), 1)
+#             for i in range(batch_size):
+#                 out[i, 0, topi[i]] = 1
 
         return decoded_batch.detach().cpu().numpy(), out_batch
 

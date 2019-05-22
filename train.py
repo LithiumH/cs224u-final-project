@@ -74,6 +74,7 @@ def collate_fn(examples):
         """
         tgt_max_len = max(len(a) for a in arrays)
         padded = torch.zeros(len(arrays), tgt_max_len + 1, src_max_len, dtype=dtype)
+        padded[:, 0, 0] = 1 # CLS is the start of all abstracts
         for i, seq in enumerate(arrays):
             c = 0 # this is used to truncate all the y's that are "empty"
             for lst in seq:
@@ -95,8 +96,8 @@ def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
     log = util.get_logger(args.save_dir, args.name)
     tbx = SummaryWriter(args.save_dir)
-    device, args.gpu_ids = util.get_available_devices()
-    # device, args.gpu_ids = torch.device('cpu'), []
+#     device, args.gpu_ids = util.get_available_devices()
+    device, args.gpu_ids = torch.device('cpu'), []
     log.info('training on device {}'.format(str(device)))
 
     # Set random seed
@@ -108,7 +109,7 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinear()
+        model = SummarizerLinearAttended(128, 256)
     else:
         model = SummarizerAbstractive(128, 256, device)
 
@@ -133,8 +134,8 @@ def train(args):
                                weight_decay=args.l2_wd)
 
     log.info('Building dataset...')
-    train_split = all_data['train']
-    dev_split = all_data['dev']
+    train_split = all_data['tiny']
+    dev_split = all_data['tiny']
 
     if args.task == 'tag':
         train_dataset = SummarizationDataset(
@@ -282,7 +283,7 @@ def test(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-seed", default=1234)
+    parser.add_argument("-seed", default=827)
     parser.add_argument("-load_path", default=None)
     parser.add_argument("-split", default='tiny')
     parser.add_argument("-batch_size", default=8)
@@ -290,7 +291,7 @@ if __name__ == '__main__':
     parser.add_argument("-num_workers", default=1)
     parser.add_argument("-lr", default=0.001)
     parser.add_argument("-l2_wd", default=0)
-    parser.add_argument("-eval_steps", default=140000)
+    parser.add_argument("-eval_steps", default=5000)
     parser.add_argument("-num_epochs", default=2)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
