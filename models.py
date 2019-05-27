@@ -223,6 +223,7 @@ class SummarizerDecoder(nn.Module):
             outputs[:, i, :] = e
         # ^^^ (b_size, dec_len, max_len)
         return outputs, (h, c) ## also return the most recent states
+    
 
 SEP_ID = 102
 
