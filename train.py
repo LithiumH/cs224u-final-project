@@ -30,12 +30,10 @@ from rouge import Rouge
 from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder, SummarizerLinearAttended
 import util
 
-print("premain: loading all data")
-# PROCESSED_DATA = os.path.join('data', 'data.pk')
-PROCESSED_DATA = os.path.join('data', 'super_tiny.pk')
-with open(PROCESSED_DATA, 'rb') as f:
-    all_data = pickle.load(f)
-
+PROCESSED_DATA = os.path.join('data', 'data.pk')
+PROCESSED_DATA_SUPER_TINY = os.path.join('data', 'super_tiny.pk')
+PAD_VALUE = 0
+    
 class SummarizationDataset(data.Dataset):
     def __init__(self, X, y, gold_sums):
         super(SummarizationDataset, self).__init__()
@@ -44,53 +42,51 @@ class SummarizationDataset(data.Dataset):
         self.y = y
         self.gold_sums = gold_sums
     def __getitem__(self, i):
-        return (self.X[i], self.y[i], self.gold_sums[i])
+        """
+        We pad the y values to a total of 110 tokens. We pad with -1
+        """
+        y = [self.y[i][j] if j < len(self.y[i]) else -1 for j in range(110)]
+        return (self.X[i], y, self.gold_sums[i])
     def __len__(self):
         return len(self.X)
 
-def collate_fn(examples):
+def tag_collate_fn(examples):
     """
-    collate function requires all examples to be non-padded
+    This collate function corresponds to the tagging task
     """
-
-    def merge_tag(arrays, dtype=torch.int64, pad_value=0):
-        """
-        This function is used for tagging task only. We can check the
-        shape of the arrays to know when to call this function
-        """
-        lengths = [len(a) for a in arrays]
-        padded = torch.zeros(len(arrays), max(lengths), dtype=dtype)
-        for i, seq in enumerate(arrays):
-            end = lengths[i]
-            padded[i, :end] = torch.tensor(np.array(seq, dtype=int))[:end]
-        return padded
-
-    def merge_decode(arrays, src_max_len, dtype=torch.int64, pad_value=0):
-        """
-        This function is used for decoding task only.
-        It creates "masks" from the indecies :
-        [1, 3] -> [[0, 1, 0, 0], [0, 0, 0, 1]]
-        Note the returned mask is of tgt_length + 1 to account for the offsets of the begin token.
-        """
-        tgt_max_len = max(len(a) for a in arrays)
-        padded = torch.zeros(len(arrays), tgt_max_len + 1, src_max_len, dtype=dtype)
-        padded[:, 0, 0] = 1 # CLS is the start of all abstracts
-        for i, seq in enumerate(arrays):
-            c = 0 # this is used to truncate all the y's that are "empty"
-            for lst in seq:
-                if len(lst) > 0:
-                    padded[i, c + 1].scatter_(0, torch.tensor(lst, dtype=torch.int64), 1)
-                    c += 1
-        return padded
-    merge_X = merge_tag # same merge function
-
     X, y, gold_sums = zip(*examples)
-    X = merge_X(X)
-    if type(y[0][0]) == type(np.array([])): # we are doing decoding task
-        y = merge_decode(y, max(len(a) for a in X))
-    else:
-        y = merge_tag(y)
-    return X, y, gold_sums
+    
+    ## First merge the X's
+    lengths = [len(x) for x in X]
+    max_len = max(lengths)
+    padded_X = torch.zeros(len(X), max_len, dtype=torch.int64)
+    for i, seq in enumerate(X):
+        end = lengths[i]
+        padded_X[i, :end] = torch.tensor(np.array(seq, dtype=np.int64))[:end]
+    
+    ## Then create the tagging mask
+    index_tensor = torch.tensor(y, dtype=torch.int64)
+    index_tensor[index_tensor == -1] = 0
+    target = torch.zeros(len(X), max_len, dtype=torch.float32).scatter_(1, index_tensor, 1)
+    return padded_X, target, gold_sums
+
+def decode_collate_fn(examples):
+    """
+    This collate function corresponds to the decoding task
+    """
+    X, y, gold_sums = zip(*examples)
+    
+    ## First merge the X's
+    lengths = [len(x) for x in X]
+    max_len = max(lengths)
+    padded_X = torch.zeros(len(X), max_len, dtype=torch.int64)
+    for i, seq in enumerate(X):
+        end = lengths[i]
+        padded_X[i, :end] = torch.tensor(np.array(seq, dtype=np.int64))[:end]
+    
+    ## Then create the tagging mask
+    target = torch.tensor(y, dtype=torch.float32)
+    return padded_X, target, gold_sums
 
 def train(args):
     args.save_dir = util.get_save_dir(args.save_dir, args.name, training=True)
@@ -100,7 +96,7 @@ def train(args):
         device, args.gpu_ids = torch.device('cpu'), []
     else:
         device, args.gpu_ids = util.get_available_devices()
-    log.info('training on device {}'.format(str(device)))
+    log.info('training on device {} with gpu_id {}'.format(str(device), str(args.gpu_ids)))
 
     # Set random seed
     log.info('Using random seed {}...'.format(args.seed))
@@ -115,15 +111,14 @@ def train(args):
 #         model = SummarizerLinear()
     else:
         model = SummarizerAbstractive(128, 256, device)
-
-#     model = nn.DataParallel(model, args.gpu_ids)
+    if len(args.gpu_ids) > 0:
+        model = nn.DataParallel(model, args.gpu_ids)
     if args.load_path:
         log.info('Loading checkpoint from {}...'.format(args.load_path))
         model, step = util.load_model(model, args.load_path, args.gpu_ids)
     else:
         step = 0
     model = model.to(device)
-
     model.train()
 
     ## get a saver
@@ -137,20 +132,20 @@ def train(args):
                                weight_decay=args.l2_wd)
 
     log.info('Building dataset...')
-    train_split = all_data['tiny']
-    dev_split = all_data['tiny']
-
-    if args.task == 'tag':
-        train_dataset = SummarizationDataset(
-                train_split['X'], train_split['y_tag'], train_split['gold_sums'])
-        dev_dataset = SummarizationDataset(
-                dev_split['X'], dev_split['y_tag'], dev_split['gold_sums'])
+    data_path = PROCESSED_DATA_SUPER_TINY if args.split == 'super_tiny' else PROCESSED_DATA
+    with open(data_path, 'rb') as f:
+        all_data = pickle.load(f)
+    if 'tiny' in args.split:
+        train_split = all_data['tiny']
+        dev_split = all_data['tiny']
     else:
-        train_dataset = SummarizationDataset(
-                train_split['X'], train_split['y_decode'], train_split['gold_sums'])
-        dev_dataset = SummarizationDataset(
-                dev_split['X'], dev_split['y_decode'], dev_split['gold_sums'])
-
+        train_split = all_data['train']
+        dev_split = all_data['dev']
+    train_dataset = SummarizationDataset(
+            train_split['X'], train_split['y'], train_split['gold'])
+    dev_dataset = SummarizationDataset(
+            dev_split['X'], dev_split['y'], dev_split['gold'])
+    collate_fn = tag_collate_fn if args.task == 'tag' else decode_collate_fn
     train_loader = data.DataLoader(train_dataset,
                                    batch_size=args.batch_size,
                                    num_workers=args.num_workers,
@@ -173,19 +168,18 @@ def train(args):
             for X, y, _ in train_loader:
                 batch_size = X.size(0)
                 X = X.to(device)
+                y = y.float().to(device) # (batch_size, max_len) for tag, (batch_size, 110) for decode
                 optimizer.zero_grad()
-
-                y = y.float().to(device)
                 if args.task == 'tag':
-                    logits, mask = model(X)
+                    logits = model(X) # (batch_size, max_len)
+                    mask = (X != PAD_VALUE).float() # 1 for real data, 0 for pad, size of (batch_size, max_len)
                     loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
                     loss_val = loss.item()
                 else:
-                    logits = model(X, y[:, :-1, :])
-                    y_mask = (y[:, 1:].sum(-1, keepdim=True) != 0).float()
-                    loss = (F.binary_cross_entropy_with_logits(logits, y[:, 1:], reduction='none') * y_mask).mean()
+                    logits = model(X, y[:, :-1]) # (batch_size, 109, max_len)
+                    loss = sum(F.cross_entropy(logits[i], y[i, 1:], ignore_index=-1, reduction='mean')\
+                               for i in range(batch_size)) / batch_size
                     loss_val = loss.item()
-
                 loss.backward()
                 nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
@@ -233,40 +227,40 @@ def evaluate(args, model, data_loader, device):
     model.eval()
     test_model = None
     if args.task == 'decode':
+        ## need to implement beam search
         test_model = GreedyDecoder(model, device)
         test_model.to(device)
         test_model.eval()
     all_preds = []
-    gold_summaries = [] # tokenized gold summaries
+    gold_summaries = [] # gold summaries
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for X, y, gold_sums in data_loader:
             X = X.to(device)
-            # Setup for forward
             batch_size = X.size(0)
             y = y.float().to(device)
+            
+            # Setup for forward
             if args.task == 'tag':
-                logits, mask = model(X)
+                logits = model(X) # (batch_size, max_len)
+                mask = (X != PAD_VALUE).float() # 1 for real data, 0 for pad, size of (batch_size, max_len)
                 loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
             else:
-                ## need to implement beam search
-                token_ids, logits = test_model(X, max_tgt_len=y.size(1)-1)
-                y_mask = (y[:, 1:].sum(-1, keepdim=True) != 0).float()
-                loss = (F.binary_cross_entropy_with_logits(logits, y[:, 1:], reduction='none') * y_mask).mean()
+                logits = test_model(X, max_tgt_len=y.size(1)-1) # (batch_size, 109, max_len)
+                loss = sum(F.cross_entropy(logits[i], y[i, 1:], ignore_index=-1, reduction='mean')\
+                               for i in range(batch_size)) / batch_size
 
             # Log info
             progress_bar.update(batch_size)
             progress_bar.set_postfix(Loss=loss.item())
 
             if args.task == 'tag':
-                preds = util.untokenize(X, logits, mask, topk=60)
+                preds = util.tag_to_sents(X, logits, topk=60)
             else:
-                assert test_model != None
-                preds = util.unidize(token_ids)
+                preds = util.decode_to_sents(X, logits)
 
             all_preds.extend(preds)
             gold_summaries.extend(gold_sums)
-
     model.train()
 
     valid_ids = [i for i in range(len(all_preds)) \
@@ -277,12 +271,60 @@ def evaluate(args, model, data_loader, device):
     ref = [gold_summaries[i] for i in valid_ids]
     rouge = Rouge()
     results = rouge.get_scores(pred, ref, avg=True)
-
-    return results, all_preds
+    return results, pred
 
 def test(args):
-    pass
+    args.save_dir = util.get_save_dir(args.save_dir, args.name, training=False)
+    log = util.get_logger(args.save_dir, args.name)
+    tbx = SummaryWriter(args.save_dir)
+    if args.gpu_ids == 'cpu':
+        device, args.gpu_ids = torch.device('cpu'), []
+    else:
+        device, args.gpu_ids = util.get_available_devices()
+    log.info('testing on device {} with gpu_id {}'.format(str(device), str(args.gpu_ids)))
+    log.info('Building model...')
+    if args.task == 'tag':
+        model = SummarizerLinearAttended(128, 256)
+#         model = SummarizerLinear()
+    else:
+        model = SummarizerAbstractive(128, 256, device)
 
+    if len(args.gpu_ids) > 0:
+        model = nn.DataParallel(model, args.gpu_ids)
+    if args.load_path:
+        log.info('Loading checkpoint from {}...'.format(args.load_path))
+        model, step = util.load_model(model, args.load_path, args.gpu_ids)
+    else:
+        raise Exception('no specified checkpoint, abort')
+    model = model.to(device)
+    model.eval()
+    log.info('Building dataset...')
+    data_path = PROCESSED_DATA_SUPER_TINY if 'super_tiny' in args.split else PROCESSED_DATA
+    with open(data_path, 'rb') as f:
+        all_data = pickle.load(f)
+    if 'tiny' in args.split:
+        test_split = all_data['tiny']
+    else:
+        test_split = all_data['test']
+    test_dataset = SummarizationDataset(
+            test_split['X'], test_split['y'], test_split['gold'])
+    collate_fn = tag_collate_fn if args.task == 'tag' else decode_collate_fn
+    test_loader = data.DataLoader(test_dataset,
+                                   batch_size=args.batch_size,
+                                   num_workers=args.num_workers,
+                                   shuffle=False,
+                                   collate_fn=collate_fn)
+    # Evaluate
+    log.info('Evaluating at step {}...'.format(step))
+    results, pred = evaluate(args, model, test_loader, device)
+    if results is None:
+        log.info('Selected predicted no select for all in batch')
+        raise Exception('no results found')
+    print(results)
+    with open(os.path.join(args.save_dir, 'preds.txt'), 'w') as f:
+        f.writelines(pred)
+    with open(os.path.join(args.save_dir, 'result.txt'), 'w') as f:
+        f.write(str(results))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -294,8 +336,8 @@ if __name__ == '__main__':
     parser.add_argument("-num_workers", default=1)
     parser.add_argument("-lr", default=0.0001)
     parser.add_argument("-l2_wd", default=0)
-    parser.add_argument("-eval_steps", default=5000, type=int)
-    parser.add_argument("-num_epochs", default=2)
+    parser.add_argument("-eval_steps", default=50000, type=int)
+    parser.add_argument("-num_epochs", default=2, type=int)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
     parser.add_argument("-name", default='default')
@@ -305,7 +347,7 @@ if __name__ == '__main__':
     parser.add_argument("-maximize_metric", default=True)
     args = parser.parse_args()
 
-    if args.split == 'train' or args.split == 'tiny':
-        train(args)
-    else:
+    if 'test' in args.split:
         test(args)
+    else:
+        train(args)

@@ -330,23 +330,32 @@ def get_logger(log_dir, name):
 
     return logger
 
-def untokenize(X, logits, mask, logit_threshold=0., topk=100):
+def remove_bert_tokens(sent):
+    return re.sub(r'( ##)|(\[CLS\] )|(\s*\[SEP\])','', sent)
+
+PAD_VALUE = 0
+def tag_to_sents(X, logits, logit_threshold=0., topk=60):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    mask = (X == PAD_VALUE)
+    logits[mask] = float('-inf')
     if topk:
         _, inds = logits.topk(topk, dim=-1)
-        predicted_mask = (torch.zeros(logits.size(), device=mask.device).scatter_(-1, inds, 1)) * mask.float()
+        token_ids = torch.gather(X, -1, inds).cpu().numpy()
     else:
-        predicted_mask = (logits > logit_threshold) * mask.byte()
-    selected = [torch.masked_select(X[i], predicted_mask[i].byte()).cpu().numpy().tolist() \
-            for i in range(logits.size(0))]
-    sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids)).replace(' ##', '').replace('[SEP]', '') \
-             for selected_ids in selected]
+        predicted_mask = (logits > logit_threshold)
+        token_ids = [torch.masked_select(X[i], predicted_mask[i].byte()).cpu().numpy().tolist() \
+                for i in range(logits.size(0))]
+    sents = [remove_bert_tokens(' '.join(tokenizer.convert_ids_to_tokens(selected_ids))) \
+             for selected_ids in token_ids]
     return sents # (batch_size, 'a (string) summary')
 
-def unidize(ids):
+def decode_to_sents(X, logits):
     tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    sents = [' '.join(tokenizer.convert_ids_to_tokens([ii for ii in i if ii != 0 and ii != 102])).replace(' ##', '') \
-            for i in ids]
+    _, inds = logits.topk(1, dim=-1)
+    inds = inds.squeeze(-1) # (batch_size, 109) each corresponds to the location in X
+    token_ids = torch.gather(X, -1, inds)
+    sents = [remove_bert_tokens(' '.join(tokenizer.convert_ids_to_tokens(selected_ids))) \
+             for selected_ids in token_ids]
     return sents
 
 # def greedy_decode(decoder, decoder_hidden, encoder_outputs, target_tensor):

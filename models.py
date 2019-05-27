@@ -144,7 +144,7 @@ class GeneratorProbability(nn.Module):
 BERT_HIDDEN_SIZE = 768
 PAD_INDEX = 0
 class SummarizerLinear(nn.Module):
-    def __init__(self, ):
+    def __init__(self):
         super(SummarizerLinear, self).__init__()
         self.bert = BertModel.from_pretrained('bert-base-uncased')
         self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
@@ -154,7 +154,7 @@ class SummarizerLinear(nn.Module):
         mask = (X != PAD_INDEX).float()
         encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (num_layers, batch_size, max_len, bert_hidden_size)
         enc = self.linear(encoded_layers).squeeze(-1) # (batch_size, max_len)
-        return enc, mask
+        return enc
 
 
 class SummarizerLinearAttended(nn.Module):
@@ -173,7 +173,7 @@ class SummarizerLinearAttended(nn.Module):
         enc, _ = self.transformer(enc, enc, enc, mask.unsqueeze(1).expand(-1, X.size(1), -1).byte()) 
         # ^(batch_size, max_len, hidden_size)
         enc = self.linear(enc).squeeze(-1) # (batch_size, max_len)
-        return enc, mask
+        return enc
 
 class SummarizerDecoder(nn.Module):
     def __init__(self, att_hidden_size, hidden_size, device):
