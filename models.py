@@ -162,8 +162,10 @@ class SummarizerLinearAttended(nn.Module):
         super(SummarizerLinearAttended, self).__init__()
         self.hidden_size = hidden_size
         self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
         self.transformer = MultiHeadAttention(6, BERT_HIDDEN_SIZE, att_hidden_size, hidden_size)
+        self.layer_norm = nn.LayerNorm(BERT_HIDDEN_SIZE)
+        self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
+
         xavier_uniform_(self.linear.weight)
 
     def forward(self, X):
@@ -171,7 +173,9 @@ class SummarizerLinearAttended(nn.Module):
         encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (batch_size, max_len, bert_hidden_size)
         enc = encoded_layers
         enc, _ = self.transformer(enc, enc, enc, mask.unsqueeze(1).expand(-1, X.size(1), -1).byte())
-        # ^(batch_size, max_len, hidden_size)
+        # ^(batch_size, max_len, bert_hidden_size)
+
+        enc = self.layer_norm(enc)
         enc = self.linear(enc).squeeze(-1) # (batch_size, max_len)
         return enc
 

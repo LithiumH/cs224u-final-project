@@ -107,8 +107,8 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinear()
-#        model = SummarizerLinearAttended(128, 256)
+#        model = SummarizerLinear()
+        model = SummarizerLinearAttended(128, 128)
 #        model = SummarizerRNN(128, 256)
     else:
         model = SummarizerAbstractive(128, 256, device)
