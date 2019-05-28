@@ -109,7 +109,7 @@ def train(args):
     if args.task == 'tag':
 #        model = SummarizerLinear()
         model = SummarizerLinearAttended(128, 128)
-#        model = SummarizerRNN(128, 256)
+#        model = SummarizerRNN(128, 128)
     else:
         model = SummarizerAbstractive(128, 256, device)
     if len(args.gpu_ids) > 0:
@@ -360,9 +360,9 @@ def test(args, no_save=False, thresholds=[]):
     log.info('testing on device {} with gpu_id {}'.format(str(device), str(args.gpu_ids)))
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinear()
-#        model = SummarizerLinearAttended(128, 256)
-#        model = SummarizerRNN(128, 256)
+#        model = SummarizerLinear()
+        model = SummarizerLinearAttended(128, 128)
+#        model = SummarizerRNN(128, 128)
     else:
         model = SummarizerAbstractive(128, 256, device)
 
@@ -411,7 +411,7 @@ def test(args, no_save=False, thresholds=[]):
     return results, pred, gold
 
 def find_threshold(args):
-    search_range = np.linspace(-5, 5, 50)
+    search_range = np.linspace(-5, 5, 16)
     results, preds, golds = test(args, True, search_range)
     avg_gold_sum_len = np.mean([len(summ) for summ in golds])
     min_i = min(range(len(search_range)),
@@ -439,8 +439,8 @@ if __name__ == '__main__':
     parser.add_argument("-task", default='tag', choices=['tag', 'decode'])
     parser.add_argument("-max_checkpoints", default=3)
     parser.add_argument("-maximize_metric", default=False)
-    parser.add_argument("-threshold", default=0.0, type=float)
-    parser.add_argument("-topk", default=60, type=int)
+    parser.add_argument("-threshold", default=-2.5, type=float)
+    parser.add_argument("-topk", default=0, type=int)
     args = parser.parse_args()
 
     if 'test' in args.split:
