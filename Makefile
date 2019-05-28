@@ -31,4 +31,5 @@ clean:
 	rm -rf saved_models/*
 
 default:
-	python train.py -name default -split train
+	python train.py -name default -split train -batch_size 12 -eval_steps 100000 -load_path saved_models/train/default-03/step_100008.pth.tar
+

@@ -259,24 +259,27 @@ def evaluate(args, model, data_loader, device):
             progress_bar.set_postfix(Loss=loss.item())
             total_loss += loss.item()
 
-            if args.task == 'tag':
-                preds = util.tag_to_sents(X, logits, threshold=args.threshold, topk=args.topk)
-            else:
-                preds = util.decode_to_sents(X, logits)
+            ## FIXME: Uncomment this and next block when testing
+            # if args.task == 'tag':
+            #     preds = util.tag_to_sents(X, logits, threshold=args.threshold, topk=args.topk)
+            # else:
+            #     preds = util.decode_to_sents(X, logits)
 
-            all_preds.extend(preds)
-            gold_summaries.extend(gold_sums)
+            # all_preds.extend(preds)
+            # gold_summaries.extend(gold_sums)
     model.train()
 
-    valid_ids = [i for i in range(len(all_preds)) \
-            if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
-    if len(valid_ids) == 0:
-        return None, None
-    pred = [all_preds[i] for i in valid_ids]
-    ref = [gold_summaries[i] for i in valid_ids]
-    rouge = Rouge()
-    results = rouge.get_scores(pred, ref, avg=True)
-    results = {key: val['r'] for key, val in results.items()}
+    # valid_ids = [i for i in range(len(all_preds)) \
+    #         if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
+    # if len(valid_ids) == 0:
+    #     return None, None
+    # pred = [all_preds[i] for i in valid_ids]
+    # ref = [gold_summaries[i] for i in valid_ids]
+    # rouge = Rouge()
+    # results = rouge.get_scores(pred, ref, avg=True)
+    # results = {key: val['r'] for key, val in results.items()}
+    results = {}
+    pred = []
     results['total_loss'] = total_loss
     return results, pred
 
@@ -439,8 +442,8 @@ if __name__ == '__main__':
     parser.add_argument("-task", default='tag', choices=['tag', 'decode'])
     parser.add_argument("-max_checkpoints", default=3)
     parser.add_argument("-maximize_metric", default=False)
-    parser.add_argument("-threshold", default=-2.5, type=float)
-    parser.add_argument("-topk", default=0, type=int)
+    parser.add_argument("-threshold", default=0, type=float)
+    parser.add_argument("-topk", default=70, type=int)
     args = parser.parse_args()
 
     if 'test' in args.split:
