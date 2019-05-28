@@ -345,9 +345,9 @@ def tag_to_sents(X, logits, threshold=0., topk=60, max_len=110):
         predicted_mask = (logits > threshold)
         token_ids = [torch.masked_select(X[i], predicted_mask[i].byte()).cpu().numpy().tolist() \
                 for i in range(logits.size(0))]
-        sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids[:max_len]))\
-             for selected_ids in token_ids]
-        sents = [remove_bert_tokens(sent) for sent in sents]
+    sents = [' '.join(tokenizer.convert_ids_to_tokens(selected_ids[:max_len]))\
+         for selected_ids in token_ids]
+    sents = [remove_bert_tokens(sent) for sent in sents]
     return sents # (batch_size, 'a (string) summary')
 
 def decode_to_sents(X, logits):

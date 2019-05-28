@@ -30,6 +30,6 @@ clean:
 	@echo -n "Are you sure? [y/N] " && read ans && [ $${ans:-N} = y ]
 	rm -rf saved_models/*
 train:
-	python train.py -name default -split train -batch_size 12 -load_path saved_models/train/default-01/step_100008.pth.tar -eval_steps 100000
+	python train.py -name default -split train -batch_size 12 -eval_steps 100000
 default: train
 
