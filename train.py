@@ -260,7 +260,7 @@ def evaluate(args, model, data_loader, device):
             total_loss += loss.item()
 
             if args.task == 'tag':
-                preds = util.tag_to_sents(X, logits, topk=60)
+                preds = util.tag_to_sents(X, logits, threshold=args.threshold, topk=args.topk)
             else:
                 preds = util.decode_to_sents(X, logits)
 
@@ -280,10 +280,79 @@ def evaluate(args, model, data_loader, device):
     results['total_loss'] = total_loss
     return results, pred
 
-def test(args):
-    args.save_dir = util.get_save_dir(args.save_dir, args.name, training=False)
-    log = util.get_logger(args.save_dir, args.name)
-    tbx = SummaryWriter(args.save_dir)
+def evaluate_thresholds(args, model, data_loader, device, thresholds):
+    model.eval()
+    test_model = None
+    if args.task == 'decode':
+        ## need to implement beam search
+        test_model = GreedyDecoder(model, device)
+        test_model.to(device)
+        test_model.eval()
+    all_preds = []
+    gold_summaries = [] # gold summaries
+    total_loss = 0.0
+    with torch.no_grad(), \
+            tqdm(total=len(data_loader.dataset)) as progress_bar:
+        for X, y, gold_sums in data_loader:
+            X = X.to(device)
+            batch_size = X.size(0)
+            y = y.float().to(device)
+
+            # Setup for forward
+            if args.task == 'tag':
+                logits = model(X) # (batch_size, max_len)
+                mask = (X != PAD_VALUE).float() # 1 for real data, 0 for pad, size of (batch_size, max_len)
+                loss = (F.binary_cross_entropy_with_logits(logits, y, reduction='none') * mask).mean()
+            else:
+                logits = test_model(X, max_tgt_len=y.size(1)-1) # (batch_size, 109, max_len)
+                loss = sum(F.cross_entropy(logits[i], y[i, 1:], ignore_index=-1, reduction='mean')\
+                               for i in range(batch_size)) / batch_size
+
+            # Log info
+            progress_bar.update(batch_size)
+            progress_bar.set_postfix(Loss=loss.item())
+            total_loss += loss.item()
+
+            if args.task == 'tag':
+                preds = [util.tag_to_sents(X, logits, threshold=th, topk=0) \
+                        for th in thresholds]
+            else:
+                preds = util.decode_to_sents(X, logits)
+
+            all_preds.extend(preds)
+            gold_summaries.extend(gold_sums)
+    model.train()
+
+    all_preds_full = all_preds
+    results_full = []
+    preds_full = []
+    for j in range(len(thresholds)):
+        all_preds = all_preds_full[j]
+        valid_ids = [i for i in range(len(all_preds)) \
+                if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
+        if len(valid_ids) == 0:
+            return None, None
+        pred = [all_preds[i] for i in valid_ids]
+        ref = [gold_summaries[i] for i in valid_ids]
+        rouge = Rouge()
+        results = rouge.get_scores(pred, ref, avg=True)
+        results = {key: val['r'] for key, val in results.items()}
+        results['total_loss'] = total_loss
+        results_full.append(results)
+        preds_full.append(pred)
+    return results_full, preds_full, gold_summaries
+
+class DummyLogger():
+    def info(self, s):
+        print(s)
+
+def test(args, no_save=False, thresholds=[]):
+    if not no_save:
+        args.save_dir = util.get_save_dir(args.save_dir, args.name, training=False)
+        log = util.get_logger(args.save_dir, args.name)
+        tbx = SummaryWriter(args.save_dir)
+    else:
+        log = DummyLogger()
     if args.gpu_ids == 'cpu':
         device, args.gpu_ids = torch.device('cpu'), []
     else:
@@ -312,6 +381,8 @@ def test(args):
         all_data = pickle.load(f)
     if 'tiny' in args.split:
         test_split = all_data['tiny']
+    elif 'dev' in args.split:
+        test_split = all_data['dev']
     else:
         test_split = all_data['test']
     test_dataset = SummarizationDataset(
@@ -324,15 +395,30 @@ def test(args):
                                    collate_fn=collate_fn)
     # Evaluate
     log.info('Evaluating at step {}...'.format(step))
-    results, pred = evaluate(args, model, test_loader, device)
+    if len(thresholds) > 0:
+        results, pred, gold = evaluate_thresholds(args, model, test_loader, device, thresholds)
+    else:
+        gold = []
+        results, pred = evaluate(args, model, test_loader, device)
     if results is None:
         log.info('Selected predicted no select for all in batch')
         raise Exception('no results found')
-    print(results)
-    with open(os.path.join(args.save_dir, 'preds.txt'), 'w') as f:
-        f.writelines(pred)
-    with open(os.path.join(args.save_dir, 'result.txt'), 'w') as f:
-        f.write(str(results))
+    if not no_save:
+        with open(os.path.join(args.save_dir, 'preds.txt'), 'w') as f:
+            f.writelines(pred)
+        with open(os.path.join(args.save_dir, 'result.txt'), 'w') as f:
+            f.write(str(results))
+    return results, pred, gold
+
+def find_threshold(args):
+    search_range = np.linspace(-5, 5, 50)
+    results, preds, golds = test(args, True, search_range)
+    avg_gold_sum_len = np.mean([len(summ) for summ in golds])
+    min_i = min(range(len(search_range)),
+            key=lambda i: abs(np.mean([len(summ) for summ in preds[i]]) - avg_gold_sum_len))
+    print("closest threshold: {} with scores {}".format(
+        search_range[min_i], str(results[min_i])))
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -353,9 +439,14 @@ if __name__ == '__main__':
     parser.add_argument("-task", default='tag', choices=['tag', 'decode'])
     parser.add_argument("-max_checkpoints", default=3)
     parser.add_argument("-maximize_metric", default=False)
+    parser.add_argument("-threshold", default=0.0, type=float)
+    parser.add_argument("-topk", default=60, type=int)
     args = parser.parse_args()
 
     if 'test' in args.split:
-        test(args)
+        results, _, _ = test(args)
+        print(results)
+    elif 'find' in args.split:
+        find_threshold(args)
     else:
         train(args)
