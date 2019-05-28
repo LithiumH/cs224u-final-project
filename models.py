@@ -180,18 +180,24 @@ class SummarizerRNN(nn.Module):
         super(SummarizerRNN, self).__init__()
         self.hidden_size = hidden_size
         self.bert = BertModel.from_pretrained('bert-base-uncased')
-        self.rnn = nn.LSTM(BERT_HIDDEN_SIZE, hidden_size, 3, batch_first=True,
+        self.rnn = nn.LSTM(BERT_HIDDEN_SIZE, hidden_size, 2, batch_first=True,
                 bidirectional=True, dropout=drop)
-        self.transformer = MultiHeadAttention(6, hidden_size, att_hidden_size, hidden_size)
-        self.linear = nn.Linear(BERT_HIDDEN_SIZE, 1)
+        self.transformer = MultiHeadAttention(6, 2*hidden_size, att_hidden_size, hidden_size)
+        self.linear = nn.Linear(2*hidden_size, 1)
         xavier_uniform_(self.linear.weight)
 
     def forward(self, X):
         mask = (X != PAD_INDEX).float()
         encoded_layers, _ = self.bert(X, attention_mask=mask, output_all_encoded_layers=False) # (batch_size, max_len, bert_hidden_size)
-        enc = encoded_layers
-        h0, c0 = torch.zeros(3 * 2, X.size(0), self.hidden_size, self.
-        self.rnn()
+        h0 = torch.zeros(3 * 2, X.size(0),
+                self.hidden_size, device=X.device, dtype=torch.float32)
+        c0 = torch.zeros(3 * 2, X.size(0),
+                self.hidden_size, device=X.device, dtype=torch.float32)
+        out, (hn, cn) = self.rnn(encoded_layers, (h0, c0))
+        dec, _ = self.transformer(out, out, out,
+                mask.unsqueeze(1).expand(-1, X.size(1), -1).byte())
+        enc = self.linear(dec).squeeze(-1) # (batch_size, max_len)
+        return enc
 
 
 class SummarizerDecoder(nn.Module):

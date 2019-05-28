@@ -27,13 +27,13 @@ from tqdm import tqdm
 
 from rouge import Rouge
 
-from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder, SummarizerLinearAttended
+from models import SummarizerLinear, SummarizerAbstractive, GreedyDecoder, SummarizerLinearAttended, SummarizerRNN
 import util
 
 PROCESSED_DATA = os.path.join('data', 'data.pk')
 PROCESSED_DATA_SUPER_TINY = os.path.join('data', 'super_tiny.pk')
 PAD_VALUE = 0
-    
+
 class SummarizationDataset(data.Dataset):
     def __init__(self, X, y, gold_sums):
         super(SummarizationDataset, self).__init__()
@@ -55,7 +55,7 @@ def tag_collate_fn(examples):
     This collate function corresponds to the tagging task
     """
     X, y, gold_sums = zip(*examples)
-    
+
     ## First merge the X's
     lengths = [len(x) for x in X]
     max_len = max(lengths)
@@ -63,7 +63,7 @@ def tag_collate_fn(examples):
     for i, seq in enumerate(X):
         end = lengths[i]
         padded_X[i, :end] = torch.tensor(np.array(seq, dtype=np.int64))[:end]
-    
+
     ## Then create the tagging mask
     index_tensor = torch.tensor(y, dtype=torch.int64)
     index_tensor[index_tensor == -1] = 0
@@ -75,7 +75,7 @@ def decode_collate_fn(examples):
     This collate function corresponds to the decoding task
     """
     X, y, gold_sums = zip(*examples)
-    
+
     ## First merge the X's
     lengths = [len(x) for x in X]
     max_len = max(lengths)
@@ -83,7 +83,7 @@ def decode_collate_fn(examples):
     for i, seq in enumerate(X):
         end = lengths[i]
         padded_X[i, :end] = torch.tensor(np.array(seq, dtype=np.int64))[:end]
-    
+
     ## Then create the tagging mask
     target = torch.tensor(y, dtype=torch.float32)
     return padded_X, target, gold_sums
@@ -107,8 +107,9 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinearAttended(128, 256)
-#         model = SummarizerLinear()
+        model = SummarizerLinear()
+#        model = SummarizerLinearAttended(128, 256)
+#        model = SummarizerRNN(128, 256)
     else:
         model = SummarizerAbstractive(128, 256, device)
     if len(args.gpu_ids) > 0:
@@ -163,10 +164,12 @@ def train(args):
     while epoch != args.num_epochs:
         epoch += 1
         log.info('Starting epoch {}...'.format(epoch))
+        batch_num = 0
         with torch.enable_grad(), \
                 tqdm(total=len(train_loader.dataset)) as progress_bar:
             for X, y, _ in train_loader:
                 batch_size = X.size(0)
+                batch_num += 1
                 X = X.to(device)
                 y = y.float().to(device) # (batch_size, max_len) for tag, (batch_size, 110) for decode
                 optimizer.zero_grad()
@@ -205,17 +208,17 @@ def train(args):
                     if results is None:
                         log.info('Selected predicted no select for all in batch')
                         continue
-                    saver.save(step, model, results[args.metric_name]['r'], device)
+                    saver.save(step, model, results[args.metric_name], device)
 
 #                     # Log to console
-                    results_str = ', '.join('{}: {:05.2f}'.format(k, v['r'])
+                    results_str = ', '.join('{}: {:05.2f}'.format(k, v)
                                             for k, v in results.items())
                     log.info('Dev {}'.format(results_str))
 
                     # Log to TensorBoard
                     log.info('Visualizing in TensorBoard...')
                     for k, v in results.items():
-                        tbx.add_scalar('dev/{}'.format(k), v['r'], step)
+                        tbx.add_scalar('dev/{}'.format(k), v, step)
 #                     util.visualize(tbx,
 #                                    pred_dict=pred_dict,
 #                                    eval_path=args.dev_eval_file,
@@ -233,13 +236,14 @@ def evaluate(args, model, data_loader, device):
         test_model.eval()
     all_preds = []
     gold_summaries = [] # gold summaries
+    total_loss = 0.0
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for X, y, gold_sums in data_loader:
             X = X.to(device)
             batch_size = X.size(0)
             y = y.float().to(device)
-            
+
             # Setup for forward
             if args.task == 'tag':
                 logits = model(X) # (batch_size, max_len)
@@ -253,6 +257,7 @@ def evaluate(args, model, data_loader, device):
             # Log info
             progress_bar.update(batch_size)
             progress_bar.set_postfix(Loss=loss.item())
+            total_loss += loss.item()
 
             if args.task == 'tag':
                 preds = util.tag_to_sents(X, logits, topk=60)
@@ -271,6 +276,8 @@ def evaluate(args, model, data_loader, device):
     ref = [gold_summaries[i] for i in valid_ids]
     rouge = Rouge()
     results = rouge.get_scores(pred, ref, avg=True)
+    results = {key: val['r'] for key, val in results.items()}
+    results['total_loss'] = total_loss
     return results, pred
 
 def test(args):
@@ -284,8 +291,9 @@ def test(args):
     log.info('testing on device {} with gpu_id {}'.format(str(device), str(args.gpu_ids)))
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinearAttended(128, 256)
-#         model = SummarizerLinear()
+        model = SummarizerLinear()
+#        model = SummarizerLinearAttended(128, 256)
+#        model = SummarizerRNN(128, 256)
     else:
         model = SummarizerAbstractive(128, 256, device)
 
@@ -337,14 +345,14 @@ if __name__ == '__main__':
     parser.add_argument("-lr", default=0.0001)
     parser.add_argument("-l2_wd", default=0)
     parser.add_argument("-eval_steps", default=50000, type=int)
-    parser.add_argument("-num_epochs", default=2, type=int)
+    parser.add_argument("-num_epochs", default=15, type=int)
     parser.add_argument("-max_grad_norm", default=2)
     parser.add_argument("-save_dir", default='saved_models')
     parser.add_argument("-name", default='default')
-    parser.add_argument("-metric_name", default='rouge-1')
+    parser.add_argument("-metric_name", default='total_loss')
     parser.add_argument("-task", default='tag', choices=['tag', 'decode'])
     parser.add_argument("-max_checkpoints", default=3)
-    parser.add_argument("-maximize_metric", default=True)
+    parser.add_argument("-maximize_metric", default=False)
     args = parser.parse_args()
 
     if 'test' in args.split:
