@@ -20,7 +20,7 @@ find:
 	python train.py -name default -split find -load_path # fill last param
 
 test-thresh:
-	python train.py -name default -split test -topk 0 -threshold -load_path # fill last 2 param
+	python train.py -name default -split test_dev -topk 0 -threshold -2.5 -load_path saved_models/train/default-03/best.pth.tar
 
 dirs:
 	mkdir data

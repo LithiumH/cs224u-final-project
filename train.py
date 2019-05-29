@@ -237,6 +237,7 @@ def evaluate(args, model, data_loader, device):
     all_preds = []
     gold_summaries = [] # gold summaries
     total_loss = 0.0
+    X_batch, logits_batch = [], []
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for X, y, gold_sums in data_loader:
@@ -260,26 +261,39 @@ def evaluate(args, model, data_loader, device):
             total_loss += loss.item()
 
             ## FIXME: Uncomment this and next block when testing
-            # if args.task == 'tag':
-            #     preds = util.tag_to_sents(X, logits, threshold=args.threshold, topk=args.topk)
-            # else:
-            #     preds = util.decode_to_sents(X, logits)
-
-            # all_preds.extend(preds)
-            # gold_summaries.extend(gold_sums)
-    model.train()
-
-    # valid_ids = [i for i in range(len(all_preds)) \
-    #         if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
-    # if len(valid_ids) == 0:
-    #     return None, None
-    # pred = [all_preds[i] for i in valid_ids]
-    # ref = [gold_summaries[i] for i in valid_ids]
-    # rouge = Rouge()
-    # results = rouge.get_scores(pred, ref, avg=True)
-    # results = {key: val['r'] for key, val in results.items()}
+            gold_summaries.extend(gold_sums)
+            X_batch.append(X.cpu())
+            logits_batch.append(logits.cpu())
     results = {}
     pred = []
+    model.train()
+
+    ## Follwoing section only needed for testing
+    if 'test' not in args.split:
+        return None, None
+    pickle.dump(logits_batch, os.path.join('data', args.split + '_logits.pk'))
+    pickle.dump(X_batch, os.path.join('data', args.split + '_X.pk'))
+    pickle.dump(gold_summaries, os.path.join('data', args.split + '_gold_sums.pk'))
+    return
+    print("Decoding...")
+    with tqdm(total=len(data_loader.dataset)) as progress_bar:
+        for X, logits in zip(X_batch, logits_batch):
+            batch_size = X.size(0)
+            if args.task == 'tag':
+                preds = util.tag_to_sents(X, logits, threshold=args.threshold, topk=args.topk)
+            else:
+                preds = util.decode_to_sents(X, logits)
+            all_preds.extend(preds)
+            progress_bar.update(batch_size)
+    valid_ids = [i for i in range(len(all_preds)) \
+            if len(all_preds[i]) > 0 and all_preds[i][0] != '.']
+    if len(valid_ids) == 0:
+        return None, None
+    pred = [all_preds[i] for i in valid_ids]
+    ref = [gold_summaries[i] for i in valid_ids]
+    rouge = Rouge()
+    results = rouge.get_scores(pred, ref, avg=True)
+    results = {key: val['r'] for key, val in results.items()}
     results['total_loss'] = total_loss
     return results, pred
 
@@ -294,6 +308,7 @@ def evaluate_thresholds(args, model, data_loader, device, thresholds):
     all_preds = []
     gold_summaries = [] # gold summaries
     total_loss = 0.0
+    X_batch, logits_batch = [], []
     with torch.no_grad(), \
             tqdm(total=len(data_loader.dataset)) as progress_bar:
         for X, y, gold_sums in data_loader:
@@ -315,16 +330,18 @@ def evaluate_thresholds(args, model, data_loader, device, thresholds):
             progress_bar.update(batch_size)
             progress_bar.set_postfix(Loss=loss.item())
             total_loss += loss.item()
-
-            if args.task == 'tag':
-                preds = [util.tag_to_sents(X, logits, threshold=th, topk=0) \
-                        for th in thresholds]
-            else:
-                preds = util.decode_to_sents(X, logits)
-
-            all_preds.extend(preds)
+            logits_batch.append(logits.cpu())
+            X_batch.append(X.cpu())
             gold_summaries.extend(gold_sums)
     model.train()
+
+    for logits in logits_batch:
+        if args.task == 'tag':
+            preds = [util.tag_to_sents(X, logits, threshold=th, topk=0) \
+                    for th in thresholds]
+        else:
+            preds = util.decode_to_sents(X, logits)
+        all_preds.extend(preds)
 
     all_preds_full = all_preds
     results_full = []
