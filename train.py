@@ -107,9 +107,9 @@ def train(args):
 
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinear()
+#        model = SummarizerLinear()
 #        model = SummarizerLinearAttended(128, 256)
-#        model = SummarizerRNN(128, 256)
+        model = SummarizerRNN(128)
     else:
         model = SummarizerAbstractive(128, 256, device)
     if len(args.gpu_ids) > 0:
@@ -294,9 +294,9 @@ def test(args):
     log.info('testing on device {} with gpu_id {}'.format(str(device), str(args.gpu_ids)))
     log.info('Building model...')
     if args.task == 'tag':
-        model = SummarizerLinear()
+#        model = SummarizerLinear()
 #        model = SummarizerLinearAttended(128, 256)
-#        model = SummarizerRNN(128, 256)
+        model = SummarizerRNN(128)
     else:
         model = SummarizerAbstractive(128, 256, device)
 

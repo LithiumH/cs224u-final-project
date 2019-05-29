@@ -1,26 +1,20 @@
 super-tiny:
-	python train.py -name super_tiny -split super_tiny -gpu_ids cpu -eval_steps 150 -num_epochs 15
+	python train.py -name super_tiny -split super_tiny -gpu_ids cpu -eval_steps 150 -num_epochs 25
+
+super-tiny-test-dev:
+	python train.py -name super_tiny -split super_tiny_test_dev -gpu_ids cpu -load_path saved_models/train/super_tiny-02/best.pth.tar
 
 super-tiny-test:
 	python train.py -name super_tiny -split super_tiny_test -gpu_ids cpu -load_path saved_models/train/super_tiny-02/best.pth.tar
 
-super-tiny-find:
-	python train.py -name super_tiny -split super_tiny_find -gpu_ids cpu -load_path saved_models/train/super_tiny-02/best.pth.tar
-
-super-tiny-test-thresh:
-	python train.py -name super_tiny -split super_tiny_test -gpu_ids cpu -load_path saved_models/train/super_tiny-02/best.pth.tar -topk 0 -threshold -3.0
-
 tiny:
 	python train.py -name tiny -split tiny -eval_steps 500 -num_epochs 10
 
-tiny-find:
-	python train.py -name tiny -split tiny -load_path # fill last param
+tiny-test-dev:
+	python train.py -name tiny -split tiny_test_dev -load_path # fill last param
 
-find:
-	python train.py -name default -split find -load_path # fill last param
-
-test-thresh:
-	python train.py -name default -split test_test -load_path saved_models/train/default-01/step_1100088.pth.tar
+test:
+	python train.py -name default -split test_test -load_path # fill last param
 
 dirs:
 	mkdir data
