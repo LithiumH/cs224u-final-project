@@ -334,8 +334,8 @@ def remove_bert_tokens(sent):
     return re.sub(r'( ##)|(\[CLS\] )|(\s*\[SEP\])','', sent)
 
 PAD_VALUE = 0
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 def tag_to_sents(X, logits, threshold=0., topk=60, max_len=110):
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     mask = (X == PAD_VALUE)
     logits[mask] = float('-inf')
     if topk:
@@ -351,7 +351,6 @@ def tag_to_sents(X, logits, threshold=0., topk=60, max_len=110):
     return sents # (batch_size, 'a (string) summary')
 
 def decode_to_sents(X, logits):
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
     _, inds = logits.topk(1, dim=-1)
     inds = inds.squeeze(-1) # (batch_size, 109) each corresponds to the location in X
     token_ids = torch.gather(X, -1, inds)
