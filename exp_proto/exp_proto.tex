@@ -1,0 +1,81 @@
+%
+% File acl2019.tex
+%
+%% Based on the style files for ACL 2018, NAACL 2018/19, which were
+%% Based on the style files for ACL-2015, with some improvements
+%%  taken from the NAACL-2016 style
+%% Based on the style files for ACL-2014, which were, in turn,
+%% based on ACL-2013, ACL-2012, ACL-2011, ACL-2010, ACL-IJCNLP-2009,
+%% EACL-2009, IJCNLP-2008...
+%% Based on the style files for EACL 2006 by 
+%%e.agirre@ehu.es or Sergi.Balari@uab.es
+%% and that of ACL 08 by Joakim Nivre and Noah Smith
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[hyperref]{acl2019}
+\usepackage{times}
+\usepackage{latexsym}
+
+\usepackage{url}
+
+\aclfinalcopy % Uncomment this line for the final submission
+%\def\aclpaperid{***} %  Enter the acl Paper ID here
+
+%\setlength\titlebox{5cm}
+% You can expand the titlebox if you need extra space
+% to show all the authors. Please do not make the titlebox
+% smaller than 5cm (the original size); we will check this
+% in the camera-ready version and ask you to change it back.
+
+\newcommand\BibTeX{B\textsc{ib}\TeX}
+
+\title{Experimental Protocol - Document Summarization}
+
+\author{Haojun Li \\
+  \texttt{haojun@stanford.edu}\\
+  \texttt{Department of Computer Science, Stanford University}
+}
+\date{}
+
+\begin{document}
+\maketitle
+\section{Hypothesis}
+Following the literature review, I hypothesize that by redefining the abstractive summarization task as a token level extractive summarization task, we would achieve better results boosted by recent advancements in pretrained contextual embeddings. Specifically, I define the summarization task as a token level tagging problem that is different from that defined by the Bottom-Up paper \cite{bottom-up}, and using Bert in a novel way different from the BertSum paper \cite{bert-sum}. Essentially, I believe that all the tokens needed to generate a coherent summary is in the source document itself scattered across many sentences, and by carefully selecting and rearranging tokens, I should be able to achieve good results.
+
+\section{Data}
+Following See et all \cite{pointer-generator}, I will use the unanonymized CNN/Daily Mail dataset. This dataset consists of total of 312060 (truncated to be a multiple of 10) source document and target summary pairs. The source document is a single news article from these two sources \footnote{Daily Mail is not really a reliable news source...} and the target summary is a 3 sentence highlight written by humans. Concatenating these 3 sentences gives us a summary target. I split up the data following BertSum \cite{bert-sum} at 90/5/5 train, dev, and test split. Thus, my dataset consists of 280854 training examples and 15603 development and test examples each. 
+
+I have already preprocessed the data and tokenized them according to Bert's specification (adding [CLS] tokens and [SEP] tokens, etc.). Since the task was originally an abstractive summarization task, I redefine it as a token level tagging task by scanning through the target summary from start to finish, finding the longest common sequence at each step, and tagging the sequence in the source that is closest to the previously tagged common sequence. Bottom-up paper \cite{bottom-up} used a similar tagging strategy where they also scanned the target but tagged the first occurrence of the longest common sequence in the source document. I hypothesize that this dramatically reduces model performance since tokens chosen in this fashion will be far away in the source document while close together in the target summary. Not only does LSTM have historically bad performance in longer sequence tasks, this style of tagging forces the underlying LSTM to reference tokens that are far away from each other when deciding whether a token will be included in the gold summary.
+
+\section{Metrics}
+The metrics for automatic evaluation is the same as those done by all previous papers, namely the ROUGE metrics. These metrics are used to measure the unigram recall (ROUGE-1), bigram recall (ROUGE-2), as well as longest common sequence recall (ROUGE-L). As noted by previous authors, there is significant issues with these metrics since, much like BLEU scores for translation tasks, higher metric values does not necessarily mean a better model. Thus, if time and resource permits, I will add some human evaluations and qualitative results as well.
+
+Since I redefine the abstractive task as an extractive task, my "gold labels" would not allow me to achieve perfect ROUGE scores. After tokenizing the source and target documents according to BERT's specification, the "gold labels" allows us to achieve 0.8 ROUGE-1, 0.7 ROUGE-2, and 0.8 ROUGE-L scores. This is higher than reported by previous papers because BERT's tokenization mechanism is different than previous papers (which uses Stanford NLP's tokenization scheme). Thus, comparing metrics with previous papers must be done with care. Nonetheless, these scores are really really good, and is also the theoretical limit of my model performance. These will be my oracle scores (a term that is used in all previous document summarization papers).
+
+\section{Models}
+The models for this task is rather simple. There are actually 2 tasks that I'm experimenting with.
+\begin{enumerate}
+	\item The first task is a purely sequence tagging task, where we will select words from the source document in the order as they appear in the source document (i.e. finding words to include in the summary). Thus, this task maximizes unigram recall, and hopefully will be useful in later tasks. This task will have BERT as the contextual embedding encoder and I will layer on top:
+	\begin{enumerate}
+		\item A single linear layer mapping the embedding at each position to a real value, which will then pass through sigmoid to find the probability of this token appearing in the summary. We will train on binary cross entropy loss, and find the right threshold during evaluation to find the best cutoff point. This will be my baseline model.
+		\item A transformer layer between BERT and output layer, which allows output units to attend to positions in the source document.
+		\item A bi-directional multi-layer LSTM between BERT and transformer layer to allow even more complexity of the model.
+	\end{enumerate}
+	These models are inspired by BertSum \cite{bert-sum}, which uses similar layers for sentence-selection style extractive summary.
+	
+	\item The second task is to not only select the words but also arrange them. I do not intend to complete this task since I do not have much time left and most of my current efforts are spent on task 1, but I'll define it here nonetheless. The task not only seeks to extract words that would be in the summary, but also seeks to arrange them in a way that will be coherent, thus maximizing ROUGE-2 and ROUGE-L. The model would be to have BERT as a contextual embedding extractor, and feed these into a decoder that attends to these embeddings at each decoding step to generate a coherent selection of tokens from the source document. This model will be similar to the Seq-seq models proposed by \cite{lead}
+\end{enumerate}
+
+\section{General Reasoning}
+I believe that abstractive summaries that generates novel words as in \cite{pointer-generator}, \cite{lead}, and \cite{dca} are overrated, and I hypothesis that a coherent summary can be generated solely by carefully selecting tokens and arranging them in the right order. The source document is so rich in vocabulary that we should not need to seek to paraphrase them with words not in the source document. In the mean time, we also should move past pure sentence-selection style extractive methods since they greatly constrain us to have exactly 3 whole sentences. This dataset and models that I have described is a perfect test for this hypothesis, such that if I was able to achieve better results than previous abstractive models, it would greatly strengthen this hypothesis. If I was unable to perform well on this task then we can analyze why the summary cannot be generated from the source document vocabulary alone, and these insights will inform later contributors to this task.
+
+\section{Progress So Far}
+I have implemented (with great pain) the entire experimental framework. I preprocessed the data and have defined the models and training code in PyTorch. I have done so by borrowing code from public Github repos such as the BertSum repo\footnote{https://github.com/nlpyang/BertSum} and Pointer-Generator repo \footnote{https://github.com/abisee/pointer-generator} for preprocessing, and previous course projects for training and modeling. I have gained preliminary results by training the baseline model, and it turns out that it is only able to achieve 0.38 ROUGE-1 score and 0.11 ROUGE-2 score, which is slightly lower than that reported by previous papers. I will seek to tune the model better with a better threshold and hyper parameters.
+
+I don't believe I would get to task 2, but I have implemented the model for task 2 as well. The main constraint at the moment is training time and cloud credits, as training with Bert might take a long time. Nonetheless, I will keep training and tuning my models
+
+\newpage
+\bibliography{lit}
+\bibliographystyle{acl_natbib}
+
+\end{document}
